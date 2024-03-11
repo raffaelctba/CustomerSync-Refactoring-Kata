@@ -1,14 +1,25 @@
 package codingdojo;
 
+import codingdojo.dto.CustomerDto;
+import codingdojo.entity.Company;
+import codingdojo.entity.Customer;
+import codingdojo.entity.Person;
+import lombok.Data;
+import lombok.Setter;
+import org.springframework.stereotype.Component;
+
 import java.util.ArrayList;
 import java.util.Collection;
 
+@Component
+@Data
 public class CustomerMatches {
-    private Collection<Customer> duplicates = new ArrayList<>();
+    private Collection<CustomerDto> duplicates = new ArrayList<>();
+    @Setter
     private String matchTerm;
-    private Customer customer;
+    private CustomerDto customer;
 
-    public Customer getCustomer() {
+    public CustomerDto getCustomerDto() {
         return customer;
     }
 
@@ -16,11 +27,11 @@ public class CustomerMatches {
         return !duplicates.isEmpty();
     }
 
-    public void addDuplicate(Customer duplicate) {
+    public void addDuplicate(CustomerDto duplicate) {
         duplicates.add(duplicate);
     }
 
-    public Collection<Customer> getDuplicates() {
+    public Collection<CustomerDto> getDuplicates() {
         return duplicates;
     }
 
@@ -28,11 +39,9 @@ public class CustomerMatches {
         return matchTerm;
     }
 
-    public void setMatchTerm(String matchTerm) {
-        this.matchTerm = matchTerm;
-    }
-
-    public void setCustomer(Customer customer) {
+    public void setCustomerDto(CustomerDto customer) {
         this.customer = customer;
     }
+
+
 }

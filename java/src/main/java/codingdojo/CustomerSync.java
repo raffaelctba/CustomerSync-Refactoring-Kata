@@ -1,36 +1,57 @@
 package codingdojo;
 
+import codingdojo.dto.CustomerDto;
+import codingdojo.dto.ExternalCustomer;
+import codingdojo.entity.Customer;
+import codingdojo.entity.ShoppingList;
+import codingdojo.entity.Person;
+import codingdojo.enums.CustomerType;
+import codingdojo.exception.ConflictException;
+import codingdojo.mapper.CompanyMapper;
+import codingdojo.mapper.CustomerMapper;
+import codingdojo.mapper.PersonMapper;
+import codingdojo.service.CustomerServiceImpl;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.stereotype.Component;
+
 import java.util.List;
 
+
+@Component
+@RequiredArgsConstructor
 public class CustomerSync {
 
-    private final CustomerDataAccess customerDataAccess;
+    private final CustomerServiceImpl customerService;
+    private final CustomerMapper customerMapper;
+    private final PersonMapper personMapper;
+    private final CompanyMapper companyMapper;
 
-    public CustomerSync(CustomerDataLayer customerDataLayer) {
-        this(new CustomerDataAccess(customerDataLayer));
-    }
 
-    public CustomerSync(CustomerDataAccess db) {
-        this.customerDataAccess = db;
-    }
-
+    @Bean
     public boolean syncWithDataLayer(ExternalCustomer externalCustomer) {
 
         CustomerMatches customerMatches;
         if (externalCustomer.isCompany()) {
+
             customerMatches = loadCompany(externalCustomer);
         } else {
             customerMatches = loadPerson(externalCustomer);
         }
-        Customer customer = customerMatches.getCustomer();
+        CustomerDto customer = customerMatches.getCustomer();
 
         if (customer == null) {
-            customer = new Customer();
-            customer.setExternalId(externalCustomer.getExternalId());
-            customer.setMasterExternalId(externalCustomer.getExternalId());
+            customer =  customerMapper.mapToCustomerDto(externalCustomer);
         }
 
-        populateFields(externalCustomer, customer);
+        if (customerMatches.hasDuplicates()) {
+            for (CustomerDto duplicate : customerMatches.getDuplicates()) {
+                updateDuplicate(externalCustomer, duplicate);
+            }
+        }
+
+        updateRelations(externalCustomer, customer);
 
         boolean created = false;
         if (customer.getInternalId() == null) {
@@ -38,45 +59,31 @@ public class CustomerSync {
             created = true;
         } else {
             updateCustomer(customer);
-        }
-        updateContactInfo(externalCustomer, customer);
 
-        if (customerMatches.hasDuplicates()) {
-            for (Customer duplicate : customerMatches.getDuplicates()) {
-                updateDuplicate(externalCustomer, duplicate);
-            }
         }
 
-        updateRelations(externalCustomer, customer);
-        updatePreferredStore(externalCustomer, customer);
 
         return created;
     }
 
-    private void updateRelations(ExternalCustomer externalCustomer, Customer customer) {
+    private void updateRelations(ExternalCustomer externalCustomer, CustomerDto customer) {
         List<ShoppingList> consumerShoppingLists = externalCustomer.getShoppingLists();
         for (ShoppingList consumerShoppingList : consumerShoppingLists) {
-            this.customerDataAccess.updateShoppingList(customer, consumerShoppingList);
+            customerService.updateShoppingList(customer, consumerShoppingList);
         }
     }
 
-    private Customer updateCustomer(Customer customer) {
-        return this.customerDataAccess.updateCustomerRecord(customer);
+    private CustomerDto updateCustomer(CustomerDto customer) {
+        return customerService.updateCustomerRecord(customer);
     }
 
-    private void updateDuplicate(ExternalCustomer externalCustomer, Customer duplicate) {
-        if (duplicate == null) {
-            duplicate = new Customer();
-            duplicate.setExternalId(externalCustomer.getExternalId());
-            duplicate.setMasterExternalId(externalCustomer.getExternalId());
-        }
+    private void updateDuplicate(ExternalCustomer externalCustomer, CustomerDto duplicate) {
+        CustomerDto customerDto = customerMapper.mapToCustomerDto(externalCustomer);
 
-        duplicate.setName(externalCustomer.getName());
-
-        if (duplicate.getInternalId() == null) {
-            createCustomer(duplicate);
+        if (customerDto.getInternalId() == null) {
+            createCustomer(customerDto);
         } else {
-            updateCustomer(duplicate);
+            updateCustomer(customerDto);
         }
     }
 
@@ -84,21 +91,20 @@ public class CustomerSync {
         customer.setPreferredStore(externalCustomer.getPreferredStore());
     }
 
-    private Customer createCustomer(Customer customer) {
-        return this.customerDataAccess.createCustomerRecord(customer);
+    private CustomerDto createCustomer(CustomerDto customer) {
+        return this.customerService.createCustomerRecord(customer);
     }
 
     private void populateFields(ExternalCustomer externalCustomer, Customer customer) {
-        customer.setName(externalCustomer.getName());
+
         if (externalCustomer.isCompany()) {
-            customer.setCompanyNumber(externalCustomer.getCompanyNumber());
-            customer.setCustomerType(CustomerType.COMPANY);
+            customerMapper.mapToCustomerDto(externalCustomer);
         } else {
-            customer.setCustomerType(CustomerType.PERSON);
+           personMapper.mapToPerson(externalCustomer);
         }
     }
 
-    private void updateContactInfo(ExternalCustomer externalCustomer, Customer customer) {
+    private void updateContactInfo(ExternalCustomer externalCustomer, CustomerDto customer) {
         customer.setAddress(externalCustomer.getPostalAddress());
     }
 
@@ -107,14 +113,14 @@ public class CustomerSync {
         final String externalId = externalCustomer.getExternalId();
         final String companyNumber = externalCustomer.getCompanyNumber();
 
-        CustomerMatches customerMatches = customerDataAccess.loadCompanyCustomer(externalId, companyNumber);
+        CustomerMatches customerMatches = customerService.loadCompanyCustomer(externalId, companyNumber);
 
         if (customerMatches.getCustomer() != null && !CustomerType.COMPANY.equals(customerMatches.getCustomer().getCustomerType())) {
             throw new ConflictException("Existing customer for externalCustomer " + externalId + " already exists and is not a company");
         }
 
         if ("ExternalId".equals(customerMatches.getMatchTerm())) {
-            String customerCompanyNumber = customerMatches.getCustomer().getCompanyNumber();
+            String customerCompanyNumber = customerMatches.getCustomerDto().getCompanyNumber();
             if (!companyNumber.equals(customerCompanyNumber)) {
                 customerMatches.getCustomer().setMasterExternalId(null);
                 customerMatches.addDuplicate(customerMatches.getCustomer());
@@ -126,7 +132,7 @@ public class CustomerSync {
             if (customerExternalId != null && !externalId.equals(customerExternalId)) {
                 throw new ConflictException("Existing customer for externalCustomer " + companyNumber + " doesn't match external id " + externalId + " instead found " + customerExternalId );
             }
-            Customer customer = customerMatches.getCustomer();
+            CustomerDto customer = customerMatches.getCustomerDto();
             customer.setExternalId(externalId);
             customer.setMasterExternalId(externalId);
             customerMatches.addDuplicate(null);
@@ -138,7 +144,7 @@ public class CustomerSync {
     public CustomerMatches loadPerson(ExternalCustomer externalCustomer) {
         final String externalId = externalCustomer.getExternalId();
 
-        CustomerMatches customerMatches = customerDataAccess.loadPersonCustomer(externalId);
+        CustomerMatches customerMatches = customerService.loadPersonCustomer(externalId);
 
         if (customerMatches.getCustomer() != null) {
             if (!CustomerType.PERSON.equals(customerMatches.getCustomer().getCustomerType())) {
@@ -146,7 +152,7 @@ public class CustomerSync {
             }
 
             if (!"ExternalId".equals(customerMatches.getMatchTerm())) {
-                Customer customer = customerMatches.getCustomer();
+                CustomerDto customer = customerMatches.getCustomer();
                 customer.setExternalId(externalId);
                 customer.setMasterExternalId(externalId);
             }
@@ -154,4 +160,10 @@ public class CustomerSync {
 
         return customerMatches;
     }
+    public Person loadCustomer(ExternalCustomer externalCustomer) {
+        return personMapper.mapToPerson(customerService.loadCompanyCustomer(externalCustomer.getExternalId(),"").getCustomerDto());
+
+
+    }
+
 }
